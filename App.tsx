@@ -4,7 +4,7 @@ import { Task, Goal, WeeklyArchive, Period } from './types';
 import { TaskItem } from './components/TaskItem';
 import { HistoryModal } from './components/HistoryModal';
 import { TaskModal } from './components/TaskModal';
-import { Plus, Archive, Bell, CheckCircle2, Circle, Clock, GripVertical, Menu, X, LogOut, Save, User as UserIcon } from 'lucide-react';
+import { Plus, Archive, Bell, CheckCircle2, Circle, Clock, GripVertical, Menu, X, LogOut, Save, User as UserIcon, ChevronLeft, ChevronRight, Play, Pause, Square } from 'lucide-react';
 
 // Utility to generate unique IDs
 const generateId = () => Math.random().toString(36).substr(2, 9);
@@ -40,6 +40,20 @@ const getLocalDateFromStr = (dateStr: string) => {
   return new Date(y, m - 1, d);
 };
 
+// Helper: Format seconds to MM:SS
+const formatDuration = (seconds: number) => {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+};
+
+interface TimerState {
+  goalId: string;
+  startTime: number; // Timestamp when start was clicked
+  accumulated: number; // Seconds accumulated before current pause
+  isRunning: boolean;
+}
+
 export default function App() {
   // -- State --
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -63,12 +77,17 @@ export default function App() {
   const [currentTimeLineTop, setCurrentTimeLineTop] = useState<number | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
 
+  // Timer State
+  const [activeTimer, setActiveTimer] = useState<TimerState | null>(null);
+  const [timerDisplay, setTimerDisplay] = useState<number>(0); // For UI updates
+
   // Grid Configuration
   const SLOT_HEIGHT_REM = 2; // h-8 is 2rem
   const SLOT_HEIGHT_PX = 32;
 
   // -- Refs --
   const dragItem = useRef<{ id: string, type: 'TASK' | 'GOAL' } | null>(null);
+  const timerIntervalRef = useRef<number | null>(null);
 
   // Static Storage Keys for Single User
   const STORAGE_KEY = 'weekly_planner_data_v1';
@@ -148,20 +167,17 @@ export default function App() {
       const existingIndex = prevArchives.findIndex(a => a.weekStartDate === currentWeekStartDate);
       
       // Only save if there is actual content
-      const hasContent = tasks.length > 0 || goals.length > 0 || Object.values(dailyThoughts).some(t => t.trim().length > 0);
+      const hasContent = tasks.length > 0 || goals.length > 0 || Object.values(dailyThoughts).some((t) => (t as string).trim().length > 0);
 
       if (!hasContent) {
-        // If no content, but it exists in archives, remove it (user deleted everything)
         if (existingIndex >= 0) {
           const newArchives = prevArchives.filter((_, idx) => idx !== existingIndex);
           localStorage.setItem(HISTORY_KEY, JSON.stringify(newArchives));
           return newArchives;
         }
-        // If no content and not in archives, do nothing
         return prevArchives;
       }
 
-      // If has content, create/update archive entry
       const currentArchiveData: WeeklyArchive = {
         id: existingIndex >= 0 ? prevArchives[existingIndex].id : generateId(),
         weekStartDate: currentWeekStartDate,
@@ -214,6 +230,108 @@ export default function App() {
 
     return () => clearInterval(intervalId);
   }, [tasks, notificationsEnabled, currentWeekStartDate]);
+
+  // -- Timer Logic --
+  useEffect(() => {
+    if (activeTimer && activeTimer.isRunning) {
+      timerIntervalRef.current = window.setInterval(() => {
+        const now = Date.now();
+        const diffInSeconds = Math.floor((now - activeTimer.startTime) / 1000);
+        setTimerDisplay(activeTimer.accumulated + diffInSeconds);
+      }, 1000);
+    } else {
+       if (timerIntervalRef.current) {
+         clearInterval(timerIntervalRef.current);
+         timerIntervalRef.current = null;
+       }
+    }
+
+    return () => {
+      if (timerIntervalRef.current) {
+        clearInterval(timerIntervalRef.current);
+      }
+    };
+  }, [activeTimer]);
+
+  const toggleTimer = (goalId: string) => {
+    if (activeTimer && activeTimer.goalId === goalId) {
+       if (activeTimer.isRunning) {
+         // Pause
+         const now = Date.now();
+         const diffInSeconds = Math.floor((now - activeTimer.startTime) / 1000);
+         setActiveTimer({
+            ...activeTimer,
+            isRunning: false,
+            accumulated: activeTimer.accumulated + diffInSeconds
+         });
+       } else {
+         // Resume
+         setActiveTimer({
+            ...activeTimer,
+            isRunning: true,
+            startTime: Date.now()
+         });
+       }
+    } else {
+      // Start new timer (implicit reset of previous if any, though UI blocks it)
+      setActiveTimer({
+        goalId,
+        startTime: Date.now(),
+        accumulated: 0,
+        isRunning: true
+      });
+      setTimerDisplay(0);
+    }
+  };
+
+  const stopTimer = (goalId: string) => {
+    if (!activeTimer || activeTimer.goalId !== goalId) return;
+    
+    // Calculate final time
+    let totalSeconds = activeTimer.accumulated;
+    if (activeTimer.isRunning) {
+      const now = Date.now();
+      totalSeconds += Math.floor((now - activeTimer.startTime) / 1000);
+    }
+    
+    // Reset timer
+    setActiveTimer(null);
+    setTimerDisplay(0);
+
+    // Create Task if duration is valid (> 0)
+    // Even if it's 1 second, we want to log it as a minimum 15-minute block.
+    if (totalSeconds > 0) {
+      const minutes = Math.ceil(totalSeconds / 60);
+      const roundedDuration = Math.max(15, Math.ceil(minutes / 15) * 15); // Round up to nearest 15, minimum 15
+      
+      const goal = goals.find(g => g.id === goalId);
+      
+      // Determine task placement: Today, Current Time
+      // We subtract the duration from current time to show "When I did it"
+      // Note: We use the actual duration for calculating start time, then snap the grid display.
+      const now = new Date();
+      const startTime = new Date(now.getTime() - (totalSeconds * 1000));
+      
+      let h = startTime.getHours();
+      const m = startTime.getMinutes();
+      
+      // Clamp to grid
+      if (h < START_HOUR) h = START_HOUR;
+      
+      // Snap to nearest 30m slot for vertical alignment consistency
+      const timeString = `${h.toString().padStart(2, '0')}:${m < 30 ? '00' : '30'}`; 
+      const todayIndex = getCurrentDayIndex();
+
+      createTaskFromGoal(
+        `${goal?.text || 'Focus Session'} (Timer)`,
+        todayIndex,
+        timeString,
+        goal?.color || TASK_COLORS[2],
+        roundedDuration,
+        true // Mark as Completed
+      );
+    }
+  };
 
   const generateWeekLabel = (d: Date) => {
     return `${d.getFullYear()} - Week ${getWeekNumber(d)}`;
@@ -302,14 +420,14 @@ export default function App() {
     setNewGoalText('');
   };
 
-  const createTaskFromGoal = (text: string, dayIndex: number, startTime: string, color: string) => {
+  const createTaskFromGoal = (text: string, dayIndex: number, startTime: string, color: string, duration = 30, isCompleted = false) => {
     const newTask: Task = {
       id: generateId(),
       title: text,
       dayIndex: dayIndex,
       startTime: startTime,
-      duration: 30,
-      isCompleted: false,
+      duration: duration,
+      isCompleted: isCompleted,
       color: color 
     };
     setTasks(prev => [...prev, newTask]);
@@ -325,6 +443,14 @@ export default function App() {
     
     createTaskFromGoal(goal.text, today, `${h.toString().padStart(2, '0')}:${m}`, goal.color);
     setIsSidebarOpen(false);
+  };
+
+  const handleWeekChange = (direction: 'prev' | 'next') => {
+      const current = getLocalDateFromStr(currentWeekStartDate);
+      const offset = direction === 'next' ? 7 : -7;
+      current.setDate(current.getDate() + offset);
+      const newDateStr = formatDate(current);
+      handleSelectWeek(newDateStr);
   };
 
   // -- Modal & Editing Handlers --
@@ -418,11 +544,31 @@ export default function App() {
             <Menu size={24} />
           </button>
           
-          <div>
-            <h1 className="text-xl md:text-2xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">
-              Weekly Focus
-            </h1>
-            <p className="hidden md:block text-sm text-slate-500">{currentWeekLabel}</p>
+          <div className="flex items-center gap-4">
+            <div>
+                <h1 className="text-xl md:text-2xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">
+                Weekly Focus
+                </h1>
+                <p className="hidden md:block text-sm text-slate-500">{currentWeekLabel}</p>
+            </div>
+            
+            <div className="flex items-center bg-slate-100 rounded-lg p-1 gap-1">
+                <button 
+                  onClick={() => handleWeekChange('prev')}
+                  className="p-1 hover:bg-white hover:shadow-sm rounded text-slate-600 transition-all"
+                  title="Previous Week"
+                >
+                    <ChevronLeft size={18} />
+                </button>
+                <div className="w-px h-4 bg-slate-300 mx-1"></div>
+                <button 
+                  onClick={() => handleWeekChange('next')}
+                  className="p-1 hover:bg-white hover:shadow-sm rounded text-slate-600 transition-all"
+                  title="Next Week"
+                >
+                    <ChevronRight size={18} />
+                </button>
+            </div>
           </div>
         </div>
         <div className="flex gap-2 md:gap-3 items-center">
@@ -507,7 +653,7 @@ export default function App() {
                             key={`cell-${dayIndex}-${slotIndex}`}
                             onDragOver={handleDragOver}
                             onDrop={() => handleDropOnGrid(dayIndex, slot.h, slot.m)}
-                            onClick={() => handleGridClick(dayIndex, slot.h, slot.m)}
+                            onDoubleClick={() => handleGridClick(dayIndex, slot.h, slot.m)}
                             className={`h-8 border-b border-slate-100 relative group transition-colors hover:bg-indigo-100/30 cursor-pointer ${periodClass}`}
                           >
                              {slot.m === 30 && <div className="absolute top-0 left-0 right-0 border-t border-slate-100/30 pointer-events-none"></div>}
@@ -583,39 +729,88 @@ export default function App() {
             <div className="p-5 border-b border-slate-100 bg-slate-50/80">
               <h2 className="text-sm font-bold text-slate-800 mb-3 flex items-center uppercase tracking-wider">
                 <CheckCircle2 size={16} className="mr-2 text-indigo-500" />
-                Weekly Goals
+                Weekly Goals & Timer
               </h2>
               
               <div className="space-y-2 mb-4 max-h-[30vh] overflow-y-auto pr-1">
-                {goals.map(goal => (
-                  <div 
-                    key={goal.id} 
-                    className={`flex items-center group p-2 bg-white rounded border shadow-sm transition-colors cursor-move border-l-4`}
-                    style={{ borderLeftColor: goal.color ? goal.color.split(' ')[0].replace('bg-', '').replace('-100', '-400') : '#cbd5e1' }}
-                    draggable
-                    onDragStart={(e) => handleGoalDragStart(e, goal.id)}
-                  >
-                    <button 
-                      onClick={() => setGoals(prev => prev.map(g => g.id === goal.id ? {...g, isCompleted: !g.isCompleted} : g))}
-                      className={`mr-2 flex-shrink-0 ${goal.isCompleted ? 'text-green-500' : 'text-slate-300 hover:text-indigo-400'}`}
+                {goals.map(goal => {
+                  const isTimerActive = activeTimer?.goalId === goal.id;
+                  
+                  return (
+                    <div 
+                      key={goal.id} 
+                      className={`flex flex-col group bg-white rounded border shadow-sm transition-colors border-l-4 ${isTimerActive ? 'ring-2 ring-indigo-200' : ''}`}
+                      style={{ borderLeftColor: goal.color ? goal.color.split(' ')[0].replace('bg-', '').replace('-100', '-400') : '#cbd5e1' }}
                     >
-                      {goal.isCompleted ? <CheckCircle2 size={16} /> : <Circle size={16} />}
-                    </button>
-                    <span className={`flex-1 text-sm truncate ${goal.isCompleted ? 'line-through text-slate-400' : 'text-slate-700'}`}>
-                      {goal.text}
-                    </span>
-                    
-                    <GripVertical size={12} className="text-slate-300 mr-1 hidden md:block" />
-                    
-                    <button 
-                      onClick={() => addTaskToToday(goal)}
-                      className="p-1 text-slate-400 hover:text-indigo-500 hover:bg-indigo-50 rounded"
-                      title="Add to Today's Grid"
-                    >
-                      <Plus size={14} />
-                    </button>
-                  </div>
-                ))}
+                      {/* Goal Header Row */}
+                      <div 
+                        className="flex items-center p-2 cursor-move"
+                        draggable
+                        onDragStart={(e) => handleGoalDragStart(e, goal.id)}
+                      >
+                          <button 
+                            onClick={() => setGoals(prev => prev.map(g => g.id === goal.id ? {...g, isCompleted: !g.isCompleted} : g))}
+                            className={`mr-2 flex-shrink-0 ${goal.isCompleted ? 'text-green-500' : 'text-slate-300 hover:text-indigo-400'}`}
+                          >
+                            {goal.isCompleted ? <CheckCircle2 size={16} /> : <Circle size={16} />}
+                          </button>
+                          <span className={`flex-1 text-sm truncate ${goal.isCompleted ? 'line-through text-slate-400' : 'text-slate-700'}`}>
+                            {goal.text}
+                          </span>
+                          
+                          <GripVertical size={12} className="text-slate-300 mr-1 hidden md:block" />
+                          
+                          <button 
+                            onClick={() => addTaskToToday(goal)}
+                            className="p-1 text-slate-400 hover:text-indigo-500 hover:bg-indigo-50 rounded"
+                            title="Add to Today's Grid"
+                          >
+                            <Plus size={14} />
+                          </button>
+                      </div>
+
+                      {/* Timer Control Row */}
+                      <div className="flex items-center justify-between px-2 pb-2 pt-0 border-t border-dashed border-slate-100 mt-0.5">
+                          <div className="flex items-center gap-1">
+                             {!isTimerActive ? (
+                               <button 
+                                 onClick={() => toggleTimer(goal.id)}
+                                 className="flex items-center gap-1 px-2 py-0.5 text-xs text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded border border-indigo-200 transition-colors"
+                               >
+                                 <Play size={10} fill="currentColor" /> Start
+                               </button>
+                             ) : (
+                               <>
+                                 <button 
+                                   onClick={() => toggleTimer(goal.id)}
+                                   className={`flex items-center gap-1 px-2 py-0.5 text-xs rounded border transition-colors ${
+                                     activeTimer.isRunning 
+                                     ? 'text-amber-600 bg-amber-50 hover:bg-amber-100 border-amber-200' 
+                                     : 'text-indigo-600 bg-indigo-50 hover:bg-indigo-100 border-indigo-200'
+                                   }`}
+                                 >
+                                   {activeTimer.isRunning ? <Pause size={10} fill="currentColor" /> : <Play size={10} fill="currentColor" />}
+                                   {activeTimer.isRunning ? 'Pause' : 'Resume'}
+                                 </button>
+                                 <button 
+                                   onClick={() => stopTimer(goal.id)}
+                                   className="flex items-center gap-1 px-2 py-0.5 text-xs text-red-600 bg-red-50 hover:bg-red-100 rounded border border-red-200 transition-colors"
+                                   title="Stop & Log Time"
+                                 >
+                                   <Square size={10} fill="currentColor" /> Done
+                                 </button>
+                               </>
+                             )}
+                          </div>
+                          {isTimerActive && (
+                             <span className={`text-xs font-mono font-bold ${activeTimer.isRunning ? 'text-indigo-600 animate-pulse' : 'text-slate-400'}`}>
+                                {formatDuration(timerDisplay)}
+                             </span>
+                          )}
+                      </div>
+                    </div>
+                  );
+                })}
                 {goals.length === 0 && (
                   <div className="text-xs text-slate-400 italic text-center py-2">Add goals to track your weekly progress</div>
                 )}
