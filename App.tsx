@@ -4,7 +4,7 @@ import { Task, Goal, WeeklyArchive, Period } from './types';
 import { TaskItem } from './components/TaskItem';
 import { HistoryModal } from './components/HistoryModal';
 import { TaskModal } from './components/TaskModal';
-import { Plus, Archive, Bell, CheckCircle2, Circle, Clock, GripVertical, Menu, X, LogOut, User as UserIcon } from 'lucide-react';
+import { Plus, Archive, Bell, CheckCircle2, Circle, Clock, GripVertical, Menu, X, LogOut, Save, User as UserIcon } from 'lucide-react';
 
 // Utility to generate unique IDs
 const generateId = () => Math.random().toString(36).substr(2, 9);
@@ -230,6 +230,22 @@ export default function App() {
     return (d.getDay() + 6) % 7;
   };
 
+  const handleManualSave = () => {
+    if (!isLoaded) return;
+    
+    // Force Save Current View
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      tasks,
+      goals,
+      dailyThoughts,
+      currentWeekStartDate,
+      weekLabel: currentWeekLabel
+    }));
+
+    // Archives are updated via useEffect, but we can force a sync message
+    alert(`Data saved successfully for ${currentWeekLabel}!`);
+  };
+
   // -- Event Handlers --
 
   const handleTaskDragStart = (e: React.DragEvent, taskId: string) => {
@@ -410,6 +426,15 @@ export default function App() {
           </div>
         </div>
         <div className="flex gap-2 md:gap-3 items-center">
+          <button 
+            onClick={handleManualSave}
+            className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors shadow-sm"
+            title="Save Data"
+          >
+            <Save size={18} />
+            <span className="hidden md:inline">Save</span>
+          </button>
+          
           <button 
             onClick={() => setIsHistoryOpen(true)}
             className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
