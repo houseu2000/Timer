@@ -10,10 +10,19 @@ interface HistoryModalProps {
 }
 
 interface WeekBlock {
-  startDate: string; // ISO string
+  startDate: string; // "YYYY-MM-DD"
   dayLabel: number; // Day of month for the Monday
   archive?: WeeklyArchive;
 }
+
+// Helper: Get Local ISO-like string YYYY-MM-DD
+// Consistent with App.tsx to avoid timezone shifts causing "off by one day" errors
+const formatDate = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
 
 export const HistoryModal: React.FC<HistoryModalProps> = ({ isOpen, onClose, archives, onSelectWeek }) => {
   const [selectedYear, setSelectedYear] = useState<number>(new Date().getFullYear());
@@ -50,8 +59,8 @@ export const HistoryModal: React.FC<HistoryModalProps> = ({ isOpen, onClose, arc
 
     // 2. Helper to get archive for a specific date
     const findArchive = (date: Date) => {
-      const dateStr = date.toISOString().split('T')[0];
-      return archives.find(a => a.weekStartDate.startsWith(dateStr));
+      const dateStr = formatDate(date);
+      return archives.find(a => a.weekStartDate === dateStr);
     };
 
     // 3. Build the grid for each year
@@ -65,6 +74,7 @@ export const HistoryModal: React.FC<HistoryModalProps> = ({ isOpen, onClose, arc
       // Find the first Monday that could belong to this year
       // Start checking from late previous year to find the first week that "belongs" to Jan
       const iterDate = new Date(year - 1, 11, 20); 
+      iterDate.setHours(0, 0, 0, 0); // Normalize time
       
       // Fast forward to first Monday
       while (iterDate.getDay() !== 1) {
@@ -81,7 +91,7 @@ export const HistoryModal: React.FC<HistoryModalProps> = ({ isOpen, onClose, arc
         // If this week belongs to the target year, add it
         if (majorityYear === year) {
           data[year][monthIndex].push({
-            startDate: iterDate.toISOString(),
+            startDate: formatDate(iterDate),
             dayLabel: iterDate.getDate(),
             archive: findArchive(iterDate)
           });
