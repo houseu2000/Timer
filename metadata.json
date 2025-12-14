@@ -1,0 +1,5 @@
+{
+  "name": "Timer",
+  "description": "A drag-and-drop weekly planner with goal tracking, time-blocking, and historical archives.",
+  "requestFramePermissions": []
+}
