@@ -1,10 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useCurrentTimeLine } from './hooks/useCurrentTimeLine';
+import { formatDuration, useGoalTimer } from './hooks/useGoalTimer';
+import { formatDate, generateWeekLabel, getCurrentDayIndex, getLocalDateFromStr, getMonday } from './utils/date';
+import { hasWeeklyContent, roundSessionDurationMinutes } from './utils/planner';
 import { DAYS_OF_WEEK, START_HOUR, END_HOUR, PERIODS, TASK_COLORS } from './constants';
 import { Task, Goal, WeeklyArchive, Period } from './types';
 import { TaskItem } from './components/TaskItem';
 import { HistoryModal } from './components/HistoryModal';
 import { TaskModal } from './components/TaskModal';
-import { Plus, Archive, Bell, CheckCircle2, Circle, Clock, GripVertical, Menu, X, LogOut, Save, User as UserIcon, ChevronLeft, ChevronRight, Play, Pause, Square } from 'lucide-react';
+import { Plus, Archive, Bell, CheckCircle2, Circle, Clock, GripVertical, Menu, X, Save, ChevronLeft, ChevronRight, Play, Pause, Square } from 'lucide-react';
 
 // Utility to generate unique IDs
 const generateId = () => Math.random().toString(36).substr(2, 9);
@@ -15,44 +19,6 @@ const getPeriod = (hour: number): Period => {
   if (hour < 18) return 'afternoon';
   return 'evening';
 };
-
-// Helper: Get Monday of the week for any date
-const getMonday = (d: Date) => {
-  const date = new Date(d);
-  const day = date.getDay();
-  const diff = date.getDate() - day + (day === 0 ? -6 : 1);
-  const newDate = new Date(date.setDate(diff));
-  newDate.setHours(0, 0, 0, 0);
-  return newDate;
-};
-
-// Helper: Get Local ISO-like string YYYY-MM-DD
-const formatDate = (date: Date) => {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-};
-
-// Helper: Parse YYYY-MM-DD to local Date object
-const getLocalDateFromStr = (dateStr: string) => {
-  const [y, m, d] = dateStr.split('-').map(Number);
-  return new Date(y, m - 1, d);
-};
-
-// Helper: Format seconds to MM:SS
-const formatDuration = (seconds: number) => {
-  const m = Math.floor(seconds / 60);
-  const s = seconds % 60;
-  return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-};
-
-interface TimerState {
-  goalId: string;
-  startTime: number; // Timestamp when start was clicked
-  accumulated: number; // Seconds accumulated before current pause
-  isRunning: boolean;
-}
 
 export default function App() {
   // -- State --
@@ -74,12 +40,8 @@ export default function App() {
   const [expandedDay, setExpandedDay] = useState<string | null>(null);
   const [currentWeekLabel, setCurrentWeekLabel] = useState<string>('');
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
-  const [currentTimeLineTop, setCurrentTimeLineTop] = useState<number | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
 
-  // Timer State
-  const [activeTimer, setActiveTimer] = useState<TimerState | null>(null);
-  const [timerDisplay, setTimerDisplay] = useState<number>(0); // For UI updates
 
   // Grid Configuration
   const SLOT_HEIGHT_REM = 2; // h-8 is 2rem
@@ -87,17 +49,17 @@ export default function App() {
 
   // -- Refs --
   const dragItem = useRef<{ id: string, type: 'TASK' | 'GOAL' } | null>(null);
-  const timerIntervalRef = useRef<number | null>(null);
 
   // Static Storage Keys for Single User
   const STORAGE_KEY = 'weekly_planner_data_v1';
   const HISTORY_KEY = 'weekly_planner_history_v1';
+  const NOTIFICATION_PREF_KEY = 'weekly_planner_notifications_enabled_v1';
 
   // -- Data Loading --
   useEffect(() => {
     // Set expanded day to today by default
     const d = new Date();
-    const todayIndex = (d.getDay() + 6) % 7;
+    const todayIndex = getCurrentDayIndex();
     setExpandedDay(DAYS_OF_WEEK[todayIndex]);
 
     // Load current state
@@ -115,7 +77,7 @@ export default function App() {
       
       if (parsed.currentWeekStartDate) {
         setCurrentWeekStartDate(parsed.currentWeekStartDate);
-        setCurrentWeekLabel(generateWeekLabel(new Date(parsed.currentWeekStartDate)));
+        setCurrentWeekLabel(generateWeekLabel(getLocalDateFromStr(parsed.currentWeekStartDate)));
       } else {
         const monday = getMonday(new Date());
         setCurrentWeekStartDate(formatDate(monday));
@@ -136,11 +98,10 @@ export default function App() {
       setArchives([]);
     }
 
-    // Request notification permission
-    if ('Notification' in window && Notification.permission !== 'denied') {
-      Notification.requestPermission().then(permission => {
-        setNotificationsEnabled(permission === 'granted');
-      });
+    if ('Notification' in window) {
+      const savedNotificationPref = localStorage.getItem(NOTIFICATION_PREF_KEY);
+      const grantedByBrowser = Notification.permission === 'granted';
+      setNotificationsEnabled(grantedByBrowser || savedNotificationPref === 'true');
     }
 
     setIsLoaded(true);
@@ -167,7 +128,7 @@ export default function App() {
       const existingIndex = prevArchives.findIndex(a => a.weekStartDate === currentWeekStartDate);
       
       // Only save if there is actual content
-      const hasContent = tasks.length > 0 || goals.length > 0 || Object.values(dailyThoughts).some((t) => (t as string).trim().length > 0);
+      const hasContent = hasWeeklyContent(tasks, goals, dailyThoughts);
 
       if (!hasContent) {
         if (existingIndex >= 0) {
@@ -200,154 +161,14 @@ export default function App() {
     });
   }, [tasks, goals, dailyThoughts, currentWeekLabel, currentWeekStartDate, isLoaded]);
 
-  // -- Clock & Reminder Logic --
-  useEffect(() => {
-    const updateTime = () => {
-      const now = new Date();
-      const viewingDate = new Date(currentWeekStartDate);
-      const currentMonday = getMonday(now);
-      const isViewingCurrentWeek = viewingDate.getTime() === currentMonday.getTime();
-
-      if (!isViewingCurrentWeek) {
-        setCurrentTimeLineTop(null);
-        return;
-      }
-
-      const h = now.getHours();
-      const m = now.getMinutes();
-
-      if (h >= START_HOUR && h <= END_HOUR) {
-        const totalMinutesFromStart = (h - START_HOUR) * 60 + m;
-        const pixelsPerMinute = SLOT_HEIGHT_PX / 30;
-        setCurrentTimeLineTop(totalMinutesFromStart * pixelsPerMinute);
-      } else {
-        setCurrentTimeLineTop(null);
-      }
-    };
-
-    updateTime(); 
-    const intervalId = setInterval(updateTime, 60000); 
-
-    return () => clearInterval(intervalId);
-  }, [tasks, notificationsEnabled, currentWeekStartDate]);
-
-  // -- Timer Logic --
-  useEffect(() => {
-    if (activeTimer && activeTimer.isRunning) {
-      timerIntervalRef.current = window.setInterval(() => {
-        const now = Date.now();
-        const diffInSeconds = Math.floor((now - activeTimer.startTime) / 1000);
-        setTimerDisplay(activeTimer.accumulated + diffInSeconds);
-      }, 1000);
-    } else {
-       if (timerIntervalRef.current) {
-         clearInterval(timerIntervalRef.current);
-         timerIntervalRef.current = null;
-       }
-    }
-
-    return () => {
-      if (timerIntervalRef.current) {
-        clearInterval(timerIntervalRef.current);
-      }
-    };
-  }, [activeTimer]);
-
-  const toggleTimer = (goalId: string) => {
-    if (activeTimer && activeTimer.goalId === goalId) {
-       if (activeTimer.isRunning) {
-         // Pause
-         const now = Date.now();
-         const diffInSeconds = Math.floor((now - activeTimer.startTime) / 1000);
-         setActiveTimer({
-            ...activeTimer,
-            isRunning: false,
-            accumulated: activeTimer.accumulated + diffInSeconds
-         });
-       } else {
-         // Resume
-         setActiveTimer({
-            ...activeTimer,
-            isRunning: true,
-            startTime: Date.now()
-         });
-       }
-    } else {
-      // Start new timer (implicit reset of previous if any, though UI blocks it)
-      setActiveTimer({
-        goalId,
-        startTime: Date.now(),
-        accumulated: 0,
-        isRunning: true
-      });
-      setTimerDisplay(0);
-    }
+  const currentTimeLineTop = useCurrentTimeLine(currentWeekStartDate, SLOT_HEIGHT_PX);
+  const handleEnableNotifications = async () => {
+    if (!('Notification' in window)) return;
+    const permission = await Notification.requestPermission();
+    const enabled = permission === 'granted';
+    setNotificationsEnabled(enabled);
+    localStorage.setItem(NOTIFICATION_PREF_KEY, String(enabled));
   };
-
-  const stopTimer = (goalId: string) => {
-    if (!activeTimer || activeTimer.goalId !== goalId) return;
-    
-    // Calculate final time
-    let totalSeconds = activeTimer.accumulated;
-    if (activeTimer.isRunning) {
-      const now = Date.now();
-      totalSeconds += Math.floor((now - activeTimer.startTime) / 1000);
-    }
-    
-    // Reset timer
-    setActiveTimer(null);
-    setTimerDisplay(0);
-
-    // Create Task if duration is valid (> 0)
-    // Even if it's 1 second, we want to log it as a minimum 15-minute block.
-    if (totalSeconds > 0) {
-      const minutes = Math.ceil(totalSeconds / 60);
-      const roundedDuration = Math.max(15, Math.ceil(minutes / 15) * 15); // Round up to nearest 15, minimum 15
-      
-      const goal = goals.find(g => g.id === goalId);
-      
-      // Determine task placement: Today, Current Time
-      // We subtract the duration from current time to show "When I did it"
-      // Note: We use the actual duration for calculating start time, then snap the grid display.
-      const now = new Date();
-      const startTime = new Date(now.getTime() - (totalSeconds * 1000));
-      
-      let h = startTime.getHours();
-      const m = startTime.getMinutes();
-      
-      // Clamp to grid
-      if (h < START_HOUR) h = START_HOUR;
-      
-      // Snap to nearest 30m slot for vertical alignment consistency
-      const timeString = `${h.toString().padStart(2, '0')}:${m < 30 ? '00' : '30'}`; 
-      const todayIndex = getCurrentDayIndex();
-
-      createTaskFromGoal(
-        `${goal?.text || 'Focus Session'} (Timer)`,
-        todayIndex,
-        timeString,
-        goal?.color || TASK_COLORS[2],
-        roundedDuration,
-        true // Mark as Completed
-      );
-    }
-  };
-
-  const generateWeekLabel = (d: Date) => {
-    return `${d.getFullYear()} - Week ${getWeekNumber(d)}`;
-  };
-
-  const getWeekNumber = (d: Date) => {
-    const onejan = new Date(d.getFullYear(), 0, 1);
-    const millisecsInDay = 86400000;
-    return Math.ceil((((d.getTime() - onejan.getTime()) / millisecsInDay) + onejan.getDay() + 1) / 7);
-  };
-
-  const getCurrentDayIndex = () => {
-    const d = new Date();
-    return (d.getDay() + 6) % 7;
-  };
-
   const handleManualSave = () => {
     if (!isLoaded) return;
     
@@ -419,20 +240,42 @@ export default function App() {
     setGoals([...goals, newGoal]);
     setNewGoalText('');
   };
-
   const createTaskFromGoal = (text: string, dayIndex: number, startTime: string, color: string, duration = 30, isCompleted = false) => {
     const newTask: Task = {
       id: generateId(),
       title: text,
-      dayIndex: dayIndex,
-      startTime: startTime,
-      duration: duration,
-      isCompleted: isCompleted,
-      color: color 
+      dayIndex,
+      startTime,
+      duration,
+      isCompleted,
+      color,
     };
     setTasks(prev => [...prev, newTask]);
   };
+  const onTimerStop = (goalId: string, totalSeconds: number) => {
+    const roundedDuration = roundSessionDurationMinutes(totalSeconds);
+    const goal = goals.find(g => g.id === goalId);
+    const now = new Date();
+    const startTime = new Date(now.getTime() - (totalSeconds * 1000));
 
+    let h = startTime.getHours();
+    const m = startTime.getMinutes();
+    if (h < START_HOUR) h = START_HOUR;
+
+    const timeString = h.toString().padStart(2, '0') + ':' + (m < 30 ? '00' : '30');
+    const todayIndex = getCurrentDayIndex();
+
+    createTaskFromGoal(
+      (goal?.text || 'Focus Session') + ' (Timer)',
+      todayIndex,
+      timeString,
+      goal?.color || TASK_COLORS[2],
+      roundedDuration,
+      true
+    );
+  };
+
+  const { activeTimer, timerDisplay, toggleTimer, stopTimer } = useGoalTimer(onTimerStop);
   const addTaskToToday = (goal: Goal) => {
     const today = getCurrentDayIndex();
     const now = new Date();
@@ -509,7 +352,7 @@ export default function App() {
         setTasks([]);
         setGoals([]);
         setDailyThoughts({});
-        const d = new Date(startDate);
+        const d = getLocalDateFromStr(targetDateStr);
         setCurrentWeekLabel(generateWeekLabel(d));
     }
     
@@ -898,7 +741,7 @@ export default function App() {
                {notificationsEnabled ? (
                   <span className="flex items-center justify-center gap-1 text-green-600"><Bell size={10} /> Reminders On</span>
                ) : (
-                  <span className="flex items-center justify-center gap-1 cursor-pointer hover:text-indigo-500" onClick={() => Notification.requestPermission()}>Enable Reminders</span>
+                  <span className="flex items-center justify-center gap-1 cursor-pointer hover:text-indigo-500" onClick={handleEnableNotifications}>Enable Reminders</span>
                )}
             </div>
           </div>
@@ -925,3 +768,18 @@ export default function App() {
     </div>
   );
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,20 +1,36 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# Weekly Focus Planner
 
-# Run and deploy your AI Studio app
+A local-first weekly planning app built with React + Vite.
 
-This contains everything you need to run your app locally.
+## Features
 
-View your app in AI Studio: https://ai.studio/apps/drive/1pdZKlTCmnFwY2Cde3wdS9JClAWwy-fUC
+- Weekly time-block grid (Mon-Sun, 30-minute slots)
+- Goal list with drag-to-schedule support
+- Goal timer that logs completed focus sessions back into the grid
+- Daily reflection notes
+- Weekly history archive persisted in local storage
+
+## Tech Stack
+
+- React 19
+- TypeScript
+- Vite
+- Tailwind (via CDN in `index.html`)
 
 ## Run Locally
 
-**Prerequisites:**  Node.js
-
+Prerequisite: Node.js 20+
 
 1. Install dependencies:
    `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
+2. Start dev server:
    `npm run dev`
+3. Build:
+   `npm run build`
+4. Preview build:
+   `npm run preview`
+
+## Notes
+
+- The app stores data in browser `localStorage`; there is no backend.
+- Browser notification permission is requested only when the user clicks "Enable Reminders".
